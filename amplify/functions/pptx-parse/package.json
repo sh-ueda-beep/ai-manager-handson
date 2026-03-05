@@ -1,0 +1,11 @@
+{
+  "name": "pptx-parse-lambda",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "fast-xml-parser": "^5.2.3",
+    "typescript": "^5.9.3",
+    "@types/node": "^24.10.1"
+  }
+}

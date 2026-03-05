@@ -1,0 +1,9 @@
+schema: spec-driven
+
+context: |
+  Tech stack: TypeScript, React 19, Vite 8, AWS Amplify Gen2, AWS CDK
+  Backend: Lambda (Docker, ARM64, Node 22), API Gateway V2
+  Frontend: Tailwind CSS 4, Radix UI, Lucide React, CVA
+  認証: Amazon Cognito (Amplify Auth) + JWT認証
+  パスエイリアス: @/* -> src/*
+  言語: 日本語でドキュメント作成

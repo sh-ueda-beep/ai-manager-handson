@@ -1,0 +1,15 @@
+{
+  "name": "pptx-review-agent",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx app.ts"
+  },
+  "dependencies": {
+    "bedrock-agentcore": "^0.2.0",
+    "tsx": "^4.7.2",
+    "zod": "^4.1.12",
+    "@ai-sdk/amazon-bedrock": "^4.0.63",
+    "ai": "^6.0.97"
+  }
+}
