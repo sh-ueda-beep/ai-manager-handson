@@ -2,6 +2,10 @@
   "name": "ai-manager",
   "private": true,
   "version": "0.0.0",
+  "workspaces": [
+    "amplify/agent",
+    "amplify/functions/pptx-parse"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite",
