@@ -1,9 +1,29 @@
 schema: spec-driven
 
 context: |
-  Tech stack: TypeScript, React 19, Vite 8, AWS Amplify Gen2, AWS CDK
-  Backend: Lambda (Docker, ARM64, Node 22), API Gateway V2
-  Frontend: Tailwind CSS 4, Radix UI, Lucide React, CVA
-  認証: Amazon Cognito (Amplify Auth) + JWT認証
-  パスエイリアス: @/* -> src/*
-  言語: 日本語でドキュメント作成
+  ## プロジェクト概要
+  PPTXファイルをアップロードしてAIレビューを受けるWebアプリケーション「AI Manager」
+
+  ## Tech Stack
+  - 言語: TypeScript 5.9, ESM (type: module)
+  - フロントエンド: React 19.2, Vite 8 (beta), Tailwind CSS 4.2
+  - UIライブラリ: Radix UI (react-slot), Lucide React, CVA (class-variance-authority), tailwind-merge, clsx
+  - 認証: Amazon Cognito (Amplify Auth) + JWT認証 (@aws-amplify/ui-react, aws-amplify)
+  - パスエイリアス: @/* → src/*
+
+  ## バックエンド (AWS Amplify Gen2 + CDK)
+  - Lambda (Docker, ARM64, Node 22): PPTXファイル解析 (jszip, fast-xml-parser)
+  - API Gateway V2 (HTTP API): JWT認証付きエンドポイント (/api/pptx/parse)
+  - Bedrock AgentCore Runtime: PPTXレビューAIエージェント (@aws-cdk/aws-bedrock-agentcore-alpha)
+  - Bedrock モデル呼び出し: InvokeModel / InvokeModelWithResponseStream
+  - デプロイ: deploy-time-build (CodeBuildでのARM64イメージビルド)
+
+  ## フロントエンド構成
+  - App.tsx: メインアプリ（ファイルアップロード → 解析 → レビューの状態遷移）
+  - コンポーネント: UploadCard, Sidebar, ReviewPanel, ReviewCard, ReviewHeader
+  - UIプリミティブ: button, card, alert, spinner (src/components/ui/)
+  - ユーティリティ: parseReview.ts (レビューテキストの構造化パース)
+  - 型定義: src/types.ts (AppState, ParseResult, StructuredReview)
+
+  ## 言語ルール
+  ドキュメント・ハンズオン資料はすべて日本語で記述
