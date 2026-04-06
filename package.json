@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "workspaces": [
     "amplify/agent",
-    "amplify/functions/pptx-parse"
+    "amplify/functions/pptx-parse",
+    "amplify/functions/documents"
   ],
   "type": "module",
   "scripts": {

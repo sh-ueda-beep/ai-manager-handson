@@ -10,7 +10,8 @@ import { fileURLToPath } from 'url';
 export function createAgentCoreRuntime(
   stack: Stack,
   userPool: IUserPool,
-  userPoolClient: IUserPoolClient
+  userPoolClient: IUserPoolClient,
+  knowledgeBaseId?: string,
 ) {
   const agentImage = new ContainerImageBuild(stack, 'AgentImage', {
     directory: path.dirname(fileURLToPath(import.meta.url)),
@@ -30,8 +31,12 @@ export function createAgentCoreRuntime(
       [userPoolClient],
     ),
     networkConfiguration: agentcore.RuntimeNetworkConfiguration.usingPublicNetwork(),
+    environmentVariables: {
+      ...(knowledgeBaseId ? { KNOWLEDGE_BASE_ID: knowledgeBaseId } : {}),
+    },
   });
 
+  // Bedrock API の利用権限
   runtime.addToRolePolicy(
     new iam.PolicyStatement({
       actions: [
@@ -42,6 +47,14 @@ export function createAgentCoreRuntime(
         'arn:aws:bedrock:*::foundation-model/*',
         'arn:aws:bedrock:*:*:inference-profile/*',
       ],
+    })
+  );
+
+  // Knowledge Base 検索権限
+  runtime.addToRolePolicy(
+    new iam.PolicyStatement({
+      actions: ['bedrock:Retrieve'],
+      resources: [`arn:aws:bedrock:${stack.region}:${stack.account}:knowledge-base/*`],
     })
   );
 
