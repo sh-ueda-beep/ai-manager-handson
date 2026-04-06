@@ -1,5 +1,6 @@
-import { Stack, Duration } from 'aws-cdk-lib';
+import { Stack, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apigatewayv2Integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as apigatewayv2Authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
@@ -13,6 +14,12 @@ export function createPptxParseLambda(
   userPool: IUserPool,
   userPoolClient: IUserPoolClient
 ) {
+  const logGroup = new logs.LogGroup(stack, 'PptxParseLogGroup', {
+    logGroupName: '/ai-manager/pptx-parse',
+    retention: logs.RetentionDays.ONE_MONTH, // ログ保持期間（デフォルトは無期限）
+    removalPolicy: RemovalPolicy.DESTROY, // sandbox 削除時にロググループも削除
+  });
+
   const pptxParseFn = new lambda.DockerImageFunction(stack, 'PptxParseFn', {
     code: lambda.DockerImageCode.fromImageAsset(
       path.dirname(fileURLToPath(import.meta.url)),
@@ -22,6 +29,7 @@ export function createPptxParseLambda(
     memorySize: 512,
     timeout: Duration.seconds(30),
     description: 'PPTX ファイル解析（テキスト・構造抽出）',
+    logGroup,
   });
 
   const jwtAuthorizer = new apigatewayv2Authorizers.HttpJwtAuthorizer(

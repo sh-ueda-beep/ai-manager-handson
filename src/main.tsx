@@ -16,7 +16,7 @@ Amplify.configure(config)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Authenticator>
+    <Authenticator hideSignUp>
       <App />
     </Authenticator>
   </StrictMode>,

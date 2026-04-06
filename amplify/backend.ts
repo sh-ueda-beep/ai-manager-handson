@@ -11,6 +11,13 @@ const backend = defineBackend({
 Tags.of(backend.stack).add('Project', 'ai-manager');
 Tags.of(backend.stack).add('ManagedBy', 'amplify');
 
+// 自己サインアップ無効化 + ゲストアクセス無効化
+const { cfnUserPool, cfnIdentityPool } = backend.auth.resources.cfnResources;
+cfnUserPool.adminCreateUserConfig = {
+  allowAdminCreateUserOnly: true,
+};
+cfnIdentityPool.allowUnauthenticatedIdentities = false;
+
 // PPTX 解析 Lambda + API Gateway
 const pptxParseStack = backend.createStack('PptxParseStack');
 Tags.of(pptxParseStack).add('Project', 'ai-manager');

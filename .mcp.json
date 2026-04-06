@@ -19,12 +19,13 @@
             "disabled": false,
             "autoApprove": []
         },
-        "awslabs.cdk-mcp-server": {
+        "awslabs.aws-iac-mcp-server": {
             "command": "uvx",
             "args": [
-                "awslabs.cdk-mcp-server@latest"
+                "awslabs.aws-iac-mcp-server@latest"
             ],
             "env": {
+                "AWS_PROFILE": "your-named-profile",
                 "FASTMCP_LOG_LEVEL": "ERROR"
             },
             "disabled": false,
