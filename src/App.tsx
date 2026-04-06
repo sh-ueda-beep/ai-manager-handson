@@ -7,6 +7,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { UploadCard } from '@/components/UploadCard'
 import { Sidebar } from '@/components/Sidebar'
 import { ReviewPanel } from '@/components/ReviewPanel'
+import { ReferenceSidebar } from '@/components/ReferenceSidebar'
 import { parseReviewText } from '@/lib/parseReview'
 import type { AppState, ParseResult, StructuredReview } from '@/types'
 
@@ -203,7 +204,7 @@ function App() {
         </main>
       )}
 
-      {/* 解析後: 2カラム */}
+      {/* 解析後: 3カラム（左:スライド、中央:レビュー、右:参照データ） */}
       {showTwoColumn && file && parseResult && (
         <div className="flex flex-1 overflow-hidden">
           <Sidebar
@@ -239,7 +240,7 @@ function App() {
               />
             )}
 
-            {/* エラー表示（2カラム内） */}
+            {/* エラー表示（3カラム内） */}
             {error && (
               <div className="p-6">
                 <Alert variant="destructive">
@@ -249,6 +250,7 @@ function App() {
               </div>
             )}
           </main>
+          <ReferenceSidebar />
         </div>
       )}
     </div>

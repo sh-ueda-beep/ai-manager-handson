@@ -10,6 +10,7 @@
     "tsx": "^4.7.2",
     "zod": "^4.1.12",
     "@ai-sdk/amazon-bedrock": "^4.0.63",
-    "ai": "^6.0.97"
+    "ai": "^6.0.97",
+    "@aws-sdk/client-bedrock-agent-runtime": "^3.700.0"
   }
 }
