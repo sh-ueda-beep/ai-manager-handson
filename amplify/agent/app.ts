@@ -19,18 +19,25 @@ const bedrockAgentRuntime = new BedrockAgentRuntimeClient({
 
 const KNOWLEDGE_BASE_ID = process.env['KNOWLEDGE_BASE_ID'] ?? ''
 
+const slideImageSchema = z.object({
+  mediaType: z.string(),
+  data: z.string(),
+})
+
 const slideSchema = z.object({
   slideNumber: z.number(),
   title: z.string(),
   body: z.string(),
   notes: z.string(),
+  images: z.array(slideImageSchema).default([]),
+  imagesTruncated: z.boolean().default(false),
 })
 
 const requestSchema = z.object({
   slides: z.array(slideSchema),
 })
 
-const systemPrompt = `あなたはプレゼンテーション資料のレビュー専門家です。提供されたスライドデータを分析し、以下の4つの観点でレビューコメントを生成してください。
+const systemPrompt = `あなたはプレゼンテーション資料のレビュー専門家です。提供されたスライドデータを分析し、以下の観点でレビューコメントを生成してください。
 
 ## レビュー観点
 
@@ -38,6 +45,7 @@ const systemPrompt = `あなたはプレゼンテーション資料のレビュ�
 2. **内容の明確さ**: 各スライドのメッセージが明確か。聴衆が理解しやすい表現になっているか。
 3. **情報量**: 1スライドあたりの情報量が適切か。過多の場合はスライド分割を、過少の場合は統合を提案する。
 4. **表現**: 誤字脱字、不自然な表現、敬語の不統一など、テキストの品質に関する指摘。
+5. **ビジュアル品質**（画像ありスライドのみ）: 図・グラフ・画像の明瞭さ、情報密度、画像内テキストの可読性（フォントサイズ・コントラスト）、スライド全体のデザインとの整合性。
 
 ## 出力形式
 
@@ -53,16 +61,17 @@ const systemPrompt = `あなたはプレゼンテーション資料のレビュ�
 - [明確さ] コメント
 - [情報量] コメント
 - [表現] コメント
+- 【ビジュアル】コメント（画像ありスライドのみ。ビジュアル観点の指摘は必ず「【ビジュアル】」で始めてください）
 
 ※ 指摘がない観点はスキップしてください。
 ※ 特に問題のないスライドは「特に指摘なし」と記載してください。
-
-5. **参照データとの整合性**: 参照データ（ガイドライン等）が提供されている場合、その内容との整合性を確認する。
+※ 参照データとの整合性: 参照データ（ガイドライン等）が提供されている場合、その内容との整合性を確認する。
 
 ## 注意事項
 - 具体的で実行可能な改善提案を心がけてください
 - ポジティブな点も積極的に指摘してください
 - スピーカーノートがある場合は、スライドの補足情報として考慮してください
+- 画像が提供されている場合は、テキストと画像の両方を踏まえてレビューを行ってください
 - 参照データが提供されている場合は、レビューの最後に「参照したデータ」セクションで参照ファイル名を列挙してください
 - 参照データが提供されていない場合は、一般知識のみでレビューを行ってください
 `
@@ -113,23 +122,39 @@ const app = new BedrockAgentCoreApp({
   invocationHandler: {
     requestSchema,
     process: async function* (request, _context) {
-      // スライドデータをプロンプトに整形
-      const slidesText = request.slides
-        .map((s) => {
-          let text = `## スライド ${s.slideNumber}`
-          if (s.title) text += `\nタイトル: ${s.title}`
-          if (s.body) text += `\n本文:\n${s.body}`
-          if (s.notes) text += `\nノート:\n${s.notes}`
-          return text
-        })
-        .join('\n\n---\n\n')
+      // スライドデータをマルチモーダルコンテンツに整形
+      type ContentBlock =
+        | { type: 'text'; text: string }
+        | { type: 'image'; image: string; mimeType: string }
 
-      const userMessage = `以下のプレゼン資料（${request.slides.length}枚のスライド）をレビューしてください。\n\nまず searchReference ツールを使って関連する社内ガイドラインを検索し、見つかった場合はその内容も踏まえてレビューを行ってください。\n\n${slidesText}`
+      const contentBlocks: ContentBlock[] = [
+        {
+          type: 'text',
+          text: `以下のプレゼン資料（${request.slides.length}枚のスライド）をレビューしてください。\n\nまず searchReference ツールを使って関連する社内ガイドラインを検索し、見つかった場合はその内容も踏まえてレビューを行ってください。\n\n`,
+        },
+      ]
+
+      for (const s of request.slides) {
+        let slideText = `## スライド ${s.slideNumber}`
+        if (s.title) slideText += `\nタイトル: ${s.title}`
+        if (s.body) slideText += `\n本文:\n${s.body}`
+        if (s.notes) slideText += `\nノート:\n${s.notes}`
+        if (s.images.length > 0) slideText += `\n（以下に画像 ${s.images.length} 枚を添付）`
+        contentBlocks.push({ type: 'text', text: slideText + '\n\n---\n\n' })
+
+        for (const img of s.images) {
+          contentBlocks.push({
+            type: 'image',
+            image: img.data,
+            mimeType: img.mediaType,
+          })
+        }
+      }
 
       const stream = await reviewAgent.stream({
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage },
+          { role: 'user', content: contentBlocks },
         ],
       })
 

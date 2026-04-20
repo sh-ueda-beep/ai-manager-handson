@@ -53,6 +53,8 @@ export function ReviewPanel({
                     slideNumber={sr.slideNumber}
                     title={slide?.title}
                     items={sr.items}
+                    visualItems={sr.visualItems}
+                    images={slide?.images}
                   />
                 )
               })}
