@@ -91,8 +91,16 @@ export function createDocumentsApi(
   });
 
   httpApi.addRoutes({
-    path: '/api/documents/{key}',
+    path: '/api/documents/{key+}',
     methods: [apigatewayv2.HttpMethod.DELETE],
+    integration,
+    authorizer: jwtAuthorizer,
+  });
+
+  // インジェストジョブ進捗ポーリング
+  httpApi.addRoutes({
+    path: '/api/documents/ingestion-jobs/{jobId}',
+    methods: [apigatewayv2.HttpMethod.GET],
     integration,
     authorizer: jwtAuthorizer,
   });

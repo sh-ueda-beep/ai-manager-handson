@@ -95,7 +95,17 @@ function App() {
       const { agentRuntimeArn } = getCustomConfig()
       const token = await getAccessToken()
 
-      const url = `https://bedrock-agentcore.ap-northeast-1.amazonaws.com/runtimes/${encodeURIComponent(agentRuntimeArn)}/invocations?qualifier=DEFAULT`
+      // Agent に送るのはテキスト情報のみで十分（画像バイトは KB 経由で参照）
+      // images の bytes/presignedUrl を剥がして枚数情報だけ残す
+      const slidesForAgent = parseResult.slides.map(s => ({
+        slideNumber: s.slideNumber,
+        title: s.title,
+        body: s.body,
+        notes: s.notes,
+        imageCount: s.images?.length ?? 0,
+      }))
+
+      const url = `https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/${encodeURIComponent(agentRuntimeArn)}/invocations?qualifier=DEFAULT`
       const res = await fetch(url, {
         method: 'POST',
         headers: {
@@ -104,7 +114,7 @@ function App() {
           Accept: 'text/event-stream',
           'x-amzn-bedrock-agentcore-runtime-session-id': crypto.randomUUID(),
         },
-        body: JSON.stringify({ slides: parseResult.slides }),
+        body: JSON.stringify({ slides: slidesForAgent }),
       })
 
       if (!res.ok) {

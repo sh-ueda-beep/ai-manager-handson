@@ -36,7 +36,12 @@ const { httpApi } = createPptxParseLambda(
 // Knowledge Base（RAG）— AgentCore より先に定義
 const kbStack = backend.createStack('KnowledgeBaseStack');
 
-const { knowledgeBaseId, dataSourceId, dataSourceBucket } = createKnowledgeBase(kbStack);
+const {
+  knowledgeBaseId,
+  dataSourceId,
+  dataSourceBucket,
+  multimodalStorageBucket,
+} = createKnowledgeBase(kbStack);
 
 // AgentCore Runtime（AI レビューエージェント）
 const agentCoreStack = backend.createStack('AgentCoreStack');
@@ -46,6 +51,8 @@ const { runtime } = createAgentCoreRuntime(
   backend.auth.resources.userPool,
   backend.auth.resources.userPoolClient,
   knowledgeBaseId,
+  multimodalStorageBucket,
+  dataSourceBucket,
 );
 
 // ドキュメント管理 API（マークダウンアップロード）
