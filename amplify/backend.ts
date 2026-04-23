@@ -5,6 +5,7 @@ import { createPptxParseLambda } from './functions/pptx-parse/resource';
 import { createAgentCoreRuntime } from './agent/resource';
 import { createKnowledgeBase } from './knowledge-base/resource';
 import { createDocumentsApi } from './functions/documents/resource';
+import { createPptxToPdfLambda } from './functions/pptx-to-pdf/resource';
 
 const backend = defineBackend({
   auth,
@@ -55,13 +56,27 @@ const { runtime } = createAgentCoreRuntime(
   dataSourceBucket,
 );
 
-// ドキュメント管理 API（マークダウンアップロード）
+// ドキュメント管理 API（マークダウン・画像・PDF アップロード）
 const documentsStack = backend.createStack('DocumentsStack');
 
-const { httpApi: documentsApi } = createDocumentsApi(
+const {
+  httpApi: documentsApi,
+  jwtAuthorizer: documentsAuthorizer,
+} = createDocumentsApi(
   documentsStack,
   backend.auth.resources.userPool,
   backend.auth.resources.userPoolClient,
+  dataSourceBucket,
+  knowledgeBaseId,
+  dataSourceId,
+);
+
+// PPTX → PDF 変換 Lambda（LibreOffice headless 入り）
+// documents API に `POST /api/documents/upload-pptx` ルートを合流させる
+createPptxToPdfLambda(
+  documentsStack,
+  documentsApi,
+  documentsAuthorizer,
   dataSourceBucket,
   knowledgeBaseId,
   dataSourceId,

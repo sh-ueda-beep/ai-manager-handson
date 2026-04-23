@@ -83,6 +83,14 @@ export function createDocumentsApi(
     authorizer: jwtAuthorizer,
   });
 
+  // PPTX バッチ登録の最後に 1 回呼ぶ専用エンドポイント
+  httpApi.addRoutes({
+    path: '/api/documents/start-ingestion',
+    methods: [apigatewayv2.HttpMethod.POST],
+    integration,
+    authorizer: jwtAuthorizer,
+  });
+
   httpApi.addRoutes({
     path: '/api/documents',
     methods: [apigatewayv2.HttpMethod.GET],
@@ -105,5 +113,5 @@ export function createDocumentsApi(
     authorizer: jwtAuthorizer,
   });
 
-  return { httpApi, documentsFn };
+  return { httpApi, documentsFn, jwtAuthorizer, integration };
 }

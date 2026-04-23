@@ -4,6 +4,7 @@ import {
   ListObjectsV2Command,
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
@@ -59,10 +60,6 @@ const EXTENSION_TO_MIME: Record<AcceptedExtension, string> = {
   pdf: 'application/pdf',
 };
 
-// 同期 Lambda (API Gateway HTTP API) 経由の実効アップロード上限。
-// Lambda リクエスト/レスポンス 6 MB 上限に、base64 オーバーヘッド (+33%) と
-// JSON ラッパを差し引いた保守的な値。クライアント側と一致させること。
-// 将来 presigned URL 方式へ移行すれば拡張可能。
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 
 const REJECTED_EXTENSIONS = new Set([
@@ -99,7 +96,6 @@ function extensionToModality(ext: AcceptedExtension): Modality {
   return 'image';
 }
 
-/** データソース同期を開始し、ジョブ ID を返す（非同期 — ポーリングはクライアント側） */
 async function startIngestion(): Promise<string | null> {
   const result = await bedrockAgent.send(new StartIngestionJobCommand({
     knowledgeBaseId: KNOWLEDGE_BASE_ID,
@@ -139,19 +135,15 @@ async function handleUpload(event: LambdaEvent): Promise<LambdaResponse> {
     });
   }
 
-  const prefix = resolvePrefix(ext);
   const modality = extensionToModality(ext);
   const mimeType = EXTENSION_TO_MIME[ext];
-  const key = `${prefix}/${fileName}`;
+  const key = `${resolvePrefix(ext)}/${fileName}`;
 
-  // 画像は base64 バイナリ、テキストは utf8 テキスト
   const bodyBuffer =
     contentEncoding === 'base64' || modality === 'image' || modality === 'document'
       ? Buffer.from(content, 'base64')
       : Buffer.from(content, 'utf8');
 
-  // クライアント側バリデーションをバイパスされた場合の多層防御。
-  // Lambda invocation 上限 (6 MB) に接触する前に明示的に拒否する。
   if (bodyBuffer.byteLength > MAX_UPLOAD_BYTES) {
     return json(413, {
       error: `ファイルサイズが上限 ${Math.floor(MAX_UPLOAD_BYTES / 1024 / 1024)} MB を超えています`,
@@ -165,7 +157,6 @@ async function handleUpload(event: LambdaEvent): Promise<LambdaResponse> {
     Key: key,
     Body: bodyBuffer,
     ContentType: mimeType,
-    // S3 メタデータヘッダは ASCII のみ許可のため、ファイル名は URL エンコードする
     Metadata: {
       'original-name': encodeURIComponent(fileName),
       modality,
@@ -188,6 +179,46 @@ async function handleUpload(event: LambdaEvent): Promise<LambdaResponse> {
   });
 }
 
+// POST /api/documents/start-ingestion
+async function handleStartIngestion(): Promise<LambdaResponse> {
+  try {
+    const ingestionJobId = await startIngestion();
+    return json(202, { ingestionJobId });
+  } catch (err) {
+    console.error('StartIngestionJob failed', err);
+    return json(500, {
+      error: 'インジェストジョブの起動に失敗しました',
+      detail: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** PPTX 由来 PDF の元ファイル名を HeadObject 経由で取得する */
+async function fetchPptxPdfMetadata(key: string): Promise<{
+  sourceType?: 'pptx-pdf';
+  sourcePptxName?: string;
+}> {
+  if (!key.startsWith('documents/pptx/')) return {};
+  try {
+    const result = await s3.send(new HeadObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: key,
+    }));
+    const meta = result.Metadata ?? {};
+    if (meta['source-type'] !== 'pptx-pdf') return {};
+    const raw = meta['original-pptx-name'] ?? '';
+    let decoded = raw;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch {
+      decoded = raw;
+    }
+    return { sourceType: 'pptx-pdf', sourcePptxName: decoded };
+  } catch {
+    return {};
+  }
+}
+
 // GET /api/documents
 async function handleList(): Promise<LambdaResponse> {
   const result = await s3.send(new ListObjectsV2Command({
@@ -199,20 +230,18 @@ async function handleList(): Promise<LambdaResponse> {
       const key = obj.Key ?? '';
       const ext = getExtension(key);
       const isImage = ext === 'png' || ext === 'jpg' || ext === 'jpeg' || ext === 'gif' || ext === 'webp';
-      let presignedUrl: string | undefined;
-      if (isImage) {
-        try {
-          // SDK サブパッケージ間の @smithy/smithy-client バージョン差による
-          // 厳密な Client 型の不一致を回避するためのキャスト（実行時は問題なし）
-          presignedUrl = await getSignedUrl(
-            s3 as unknown as Parameters<typeof getSignedUrl>[0],
-            new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }),
-            { expiresIn: 300 }
-          );
-        } catch {
-          presignedUrl = undefined;
-        }
-      }
+
+      const [presignedUrl, pptxMeta] = await Promise.all([
+        isImage
+          ? getSignedUrl(
+              s3 as unknown as Parameters<typeof getSignedUrl>[0],
+              new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }),
+              { expiresIn: 300 }
+            ).catch(() => undefined)
+          : Promise.resolve<string | undefined>(undefined),
+        fetchPptxPdfMetadata(key),
+      ]);
+
       return {
         fileName: key,
         size: obj.Size,
@@ -220,6 +249,7 @@ async function handleList(): Promise<LambdaResponse> {
         contentType: isAcceptedExtension(ext) ? EXTENSION_TO_MIME[ext] : 'application/octet-stream',
         modality: isAcceptedExtension(ext) ? extensionToModality(ext) : 'text',
         presignedUrl,
+        ...pptxMeta,
       };
     })
   );
@@ -272,6 +302,10 @@ export async function handler(event: LambdaEvent): Promise<LambdaResponse> {
 
     if (method === 'OPTIONS') {
       return { statusCode: 200, headers: corsHeaders, body: '' };
+    }
+
+    if (method === 'POST' && path.endsWith('/start-ingestion')) {
+      return await handleStartIngestion();
     }
 
     if (method === 'POST' && path.endsWith('/upload')) {

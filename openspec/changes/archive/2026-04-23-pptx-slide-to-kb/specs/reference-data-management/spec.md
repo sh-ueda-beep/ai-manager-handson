@@ -1,7 +1,7 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: 参照ファイルのアップロード
-フロントエンドの参照データサイドバーは、認証済みユーザが以下の拡張子のファイルをアップロードできなければならない（MUST）: `.md`、`.png`、`.jpg`、`.jpeg`、`.gif`、`.webp`、`.pdf`、`.pptx`。1 ファイルあたりの最大サイズは **4 MB**（同期 Lambda 経由の API Gateway + base64 オーバーヘッドを考慮した実効上限）とし、上限超過時はクライアント側で事前拒否しなければならない（MUST）。サーバ側も多層防御として、base64 デコード後のバッファ長が 4 MB を超えたら HTTP 413 を返さなければならない（MUST）。
+フロントエンドの参照データサイドバーは、認証済みユーザが以下の拡張子のファイルをアップロードできなければならない（MUST）: `.md`、`.png`、`.jpg`、`.jpeg`、`.gif`、`.webp`、`.pdf`、**`.pptx`**。1 ファイルあたりの最大サイズは **4 MB**（同期 Lambda 経由の API Gateway + base64 オーバーヘッドを考慮した実効上限）とし、上限超過時はクライアント側で事前拒否しなければならない（MUST）。サーバ側も多層防御として、base64 デコード後のバッファ長が 4 MB を超えたら HTTP 413 を返さなければならない（MUST）。
 
 #### Scenario: 許可拡張子のアップロード
 - **WHEN** ユーザが `.md` / `.png` / `.pdf` / `.pptx` 等のファイルを選択ダイアログから投入する
@@ -31,66 +31,12 @@
 - **WHEN** ユーザが参照データサイドバーを開く
 - **THEN** アップロードボタン近辺に「最大 4 MB / ファイル」を明示する
 
-### Requirement: ファイル種別ごとのプレフィックス分離
-データソース S3 バケット内では、ファイル種別ごとにプレフィックスを分離しなければならない（MUST）。`documents/` にテキストと PDF、`images/` に画像を配置する。予約プレフィックスとして `videos/` と `audio/` を設けるが、初期実装では書き込みを行わない（MUST）。
-
-#### Scenario: 画像ファイルの保存先
-- **WHEN** ユーザが `.png` をアップロードする
-- **THEN** ファイルは `images/${uuid}.png` として保存される
-
-#### Scenario: Markdown ファイルの保存先
-- **WHEN** ユーザが `.md` をアップロードする
-- **THEN** ファイルは `documents/${uuid}.md` として保存される
-
-#### Scenario: PDF ファイルの保存先
-- **WHEN** ユーザが `.pdf` をアップロードする
-- **THEN** ファイルは `documents/${uuid}.pdf` として保存される
-
-### Requirement: 参照ファイル一覧表示
-サイドバーは認証済みユーザが所有する参照ファイルを、ファイル名・種別・サイズ・アップロード日時で一覧表示しなければならない（MUST）。画像ファイルはサムネイル（multimodal storage destination 内の画像を直接 presigned URL で表示）を表示しなければならない（MUST）。
-
-#### Scenario: 画像サムネイル表示
-- **WHEN** 一覧に画像ファイルが含まれる
-- **THEN** サイドバーは各画像の presigned URL（5 分有効）からサムネイルを表示する
-
-#### Scenario: テキスト・PDF のアイコン表示
-- **WHEN** 一覧にテキスト・PDF ファイルが含まれる
-- **THEN** サイドバーは種別に応じたアイコン（Markdown、PDF）をサムネイル枠に表示する
-
-#### Scenario: 空のリスト
-- **WHEN** アップロード済みファイルが 1 件も存在しない
-- **THEN** サイドバーは「参照データが登録されていません」の空状態メッセージを表示する
-
-### Requirement: 参照ファイルの削除
-ユーザは一覧画面から参照ファイルを個別に削除できなければならない（MUST）。削除操作はデータソース S3 からのオブジェクト削除と Bedrock KB インジェストジョブの再実行（対象ファイルを KB から除外）を含まなければならない（MUST）。
-
-#### Scenario: 正常な削除
-- **WHEN** ユーザが一覧画面の削除ボタンをクリックして確認ダイアログで「削除」を選ぶ
-- **THEN** システムは S3 オブジェクトを削除し、Bedrock KB の再インジェストジョブを起動する
-
-#### Scenario: 削除キャンセル
-- **WHEN** ユーザが確認ダイアログで「キャンセル」を選ぶ
-- **THEN** システムは何も変更せず、一覧画面に戻る
-
-### Requirement: インジェスト状態の可視化
-サイドバーは各ファイルのインジェストジョブ状態（`STARTING` / `IN_PROGRESS` / `COMPLETE` / `FAILED`）をバッジまたはアイコンで可視化しなければならない（MUST）。`IN_PROGRESS` のファイルは Retrieve 結果には含まれない旨を UI で示唆しなければならない（SHOULD）。
-
-#### Scenario: 処理中バッジ
-- **WHEN** アップロード直後でインジェスト進行中のファイルが存在する
-- **THEN** サイドバーは該当ファイルに「処理中」バッジを表示する
-
-#### Scenario: 失敗時の表示
-- **WHEN** ファイルのインジェストが失敗する
-- **THEN** サイドバーは「失敗」バッジと再試行ボタンを表示する
-
-#### Scenario: 完了後のバッジ消去
-- **WHEN** インジェストが `COMPLETE` になる
-- **THEN** サイドバーはバッジを消し、通常表示へ戻す
+## ADDED Requirements
 
 ### Requirement: PPTX→PDF 変換パイプライン
 `.pptx` ファイルがサイドバーから選択された場合、フロントエンドは以下を自動実行しなければならない（MUST）：
 
-1. 元 PPTX の SHA-256 を Web Crypto API (`crypto.subtle.digest`) で計算し、hex 先頭 12 文字を `pptxHash` として保持
+1. 元 PPTX の SHA-256 を Web Crypto API (`crypto.subtle.digest`) で計算し、hex 先頭 12 文字を `pptxHash` として保持（既存 `src/lib/pptxHash.ts` を流用）
 2. `POST /api/documents/upload-pptx` に `{ fileName, content (base64), contentEncoding: 'base64', pptxHash }` を送信
 3. サーバから返ってきた `ingestionJobId` を既存のサイドバーのジョブポーリング機構に引き継ぐ
 
@@ -182,6 +128,8 @@ S3 オブジェクトタグは使ってはならない（MUST NOT）。日本語
 - データソースバケットへの `s3:PutObject`
 - `bedrock:StartIngestionJob` / `bedrock:GetIngestionJob`（対象 KB）
 
+先行実装で `documents` Lambda に付与されていた `s3:GetObjectTagging` / `s3:PutObjectTagging` は、本チェンジで不要となるため削除しなければならない（MUST）。
+
 #### Scenario: pptx-to-pdf の S3 書込権限
 - **WHEN** Lambda が `PutObject` で `documents/pptx/<hash>.pdf` を保存する
 - **THEN** 権限拒否にならず保存が成功する
@@ -190,13 +138,23 @@ S3 オブジェクトタグは使ってはならない（MUST NOT）。日本語
 - **WHEN** Lambda が `StartIngestionJob` を呼ぶ
 - **THEN** 権限拒否にならずジョブが起動する
 
-### Requirement: Cognito 認証の適用
-すべての `/api/documents` エンドポイント（一覧・アップロード・削除・インジェスト状態取得）は Cognito JWT 認証を必須としなければならない（MUST）。
+#### Scenario: 旧タグ権限の撤去
+- **WHEN** スタックデプロイ後に `documents` Lambda の IAM ポリシーを確認する
+- **THEN** `s3:GetObjectTagging` / `s3:PutObjectTagging` は含まれていない
 
-#### Scenario: 有効なトークン
-- **WHEN** 有効な JWT を含むリクエストが送信される
-- **THEN** システムは対応する処理を実行する
+## REMOVED Requirements
 
-#### Scenario: 無効・欠落トークン
-- **WHEN** JWT が欠落または期限切れのリクエストが送信される
-- **THEN** API Gateway はステータスコード 401 を返す
+### Requirement: PPTX バッチ登録パイプライン
+**Reason**: PPTX 内の画像を個別にアップロードするアプローチは、「スライドの図表・フローチャートの関係性が失われる」「埋め込み素材画像しか取れず意味が薄い」「S3 Object Tag の `TagValue invalid` 問題で実運用に載らなかった」という問題があり、PPTX→PDF 変換 + Foundation Model Parser 任せの新方式に全面置換するため削除する。
+
+**Migration**: フロントエンドは `uploadPptxAsSlides` の代わりに新 `uploadPptx` を呼び出す。サーバ側は `documents` Lambda の `metadata.sourceType='pptx-slide'` 分岐と `buildPptxSlideKey` / `encodeTagValueBase64` / `fetchPptxTags` を削除し、新 `pptx-to-pdf` Lambda に処理を委譲する。旧方式でアップロード成功したファイルは存在しないため、データマイグレーション不要。
+
+### Requirement: PPTX スライド画像のメタデータ付与
+**Reason**: S3 Object Tag にメタデータ（`sourcePptxName`、`slideNumber`、`pptxHash`）を Base64 で保存する方式は、PDF 1 ファイル化に伴いスライド番号概念が消え、元 PPTX 名は Metadata ヘッダで十分扱えるため不要になった。
+
+**Migration**: 同上。PPTX 由来の PDF は S3 Metadata ヘッダ `original-pptx-name` と `source-type=pptx-pdf` で識別する新方式に移行。
+
+### Requirement: アップロード API の `skipIngestion` フラグ
+**Reason**: スライド 1 枚ごとにアップロード API を N 回叩いて最後にまとめてインジェスト起動する設計は、PDF 1 ファイル化で不要になった。`pptx-to-pdf` Lambda が PDF 保存と同時にジョブ起動まで 1 操作で完結する。
+
+**Migration**: `documents` Lambda の `/api/documents/upload` からは `skipIngestion` パラメータを削除する。`/api/documents/start-ingestion` エンドポイント自体は残置（管理運用での手動トリガー等に有用）。

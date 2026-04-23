@@ -21,13 +21,17 @@ export interface DocumentFile {
   contentType: string
   modality: Modality
   presignedUrl?: string
+  /** PPTX から PDF に変換されて登録されたファイルに付く */
+  sourceType?: 'pptx-pdf'
+  /** PPTX 由来 PDF の元 PPTX ファイル名（表示用） */
+  sourcePptxName?: string
 }
 
 export interface UploadResponse {
-  message: string
+  message?: string
   fileName: string
   key: string
-  modality: Modality
+  modality?: Modality
   ingestionJobId: string | null
 }
 
@@ -37,14 +41,10 @@ export interface IngestionJobStatus {
   failureReasons: string[]
 }
 
-const ACCEPTED_EXTENSIONS = ['md', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf']
+const ACCEPTED_EXTENSIONS = ['md', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf', 'pptx']
 
-// 現状のアップロードは API Gateway (HTTP API) + Lambda の同期呼び出しで、
-// Lambda のリクエスト/レスポンスボディ上限は 6 MB。本体は base64 + JSON ラッパで
-// 送るため、base64 オーバーヘッド (+33%) と JSON 包装を差し引いた生ファイル
-// 実効上限は約 4 MB となる。それ以上のファイルはこのパスでは受け付けられない。
-// TODO: S3 presigned URL による直接アップロード方式に切替時にはこの上限を拡張できる
-//       （単一 PUT で 5 GB まで）。
+// 同期 Lambda (API Gateway HTTP API) 経由の実効アップロード上限。
+// Lambda リクエスト/レスポンス 6 MB 上限に base64 オーバーヘッドを差し引いた保守値。
 export const MAX_FILE_SIZE_BYTES = 4 * 1024 * 1024
 export const MAX_FILE_SIZE_LABEL = '4 MB'
 
@@ -61,7 +61,6 @@ export function isAcceptedFile(file: File): { ok: true } | { ok: false; reason: 
 
 async function fileToBase64(file: File): Promise<string> {
   const buffer = await file.arrayBuffer()
-  // 大きなファイルでスタックオーバーフローしないようにチャンク変換
   const bytes = new Uint8Array(buffer)
   let binary = ''
   const chunkSize = 0x8000
@@ -72,13 +71,17 @@ async function fileToBase64(file: File): Promise<string> {
   return btoa(binary)
 }
 
+/** `.md` / 画像 / `.pdf` 等の単一ファイルアップロード */
 export async function uploadDocument(file: File): Promise<UploadResponse> {
   const check = isAcceptedFile(file)
   if (!check.ok) throw new Error(check.reason)
 
   const ext = file.name.toLowerCase().split('.').pop() ?? ''
-  const isBinary = ext !== 'md'
+  if (ext === 'pptx') {
+    throw new Error('PPTX は uploadPptx() を使用してください')
+  }
 
+  const isBinary = ext !== 'md'
   const content = isBinary ? await fileToBase64(file) : await file.text()
   const contentEncoding: 'base64' | 'utf8' = isBinary ? 'base64' : 'utf8'
 
@@ -94,6 +97,34 @@ export async function uploadDocument(file: File): Promise<UploadResponse> {
   if (!res.ok) {
     const data = await res.json().catch(() => ({ error: 'アップロードに失敗しました' }))
     throw new Error(data.error || `HTTP ${res.status}`)
+  }
+  return await res.json()
+}
+
+/** `.pptx` を PDF 変換して KB に登録する */
+export async function uploadPptx(file: File, pptxHash: string): Promise<UploadResponse> {
+  const check = isAcceptedFile(file)
+  if (!check.ok) throw new Error(check.reason)
+
+  const content = await fileToBase64(file)
+  const token = await getAccessToken()
+  const res = await fetch(`${getDocumentsApiUrl()}/api/documents/upload-pptx`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      fileName: file.name,
+      content,
+      contentEncoding: 'base64',
+      pptxHash,
+    }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: 'PPTX のアップロードに失敗しました' }))
+    const detail = data.detail ? `: ${data.detail}` : ''
+    throw new Error((data.error || `HTTP ${res.status}`) + detail)
   }
   return await res.json()
 }
@@ -127,5 +158,19 @@ export async function getIngestionJobStatus(jobId: string): Promise<IngestionJob
     { headers: { Authorization: `Bearer ${token}` } }
   )
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return await res.json()
+}
+
+/** 管理運用・リトライ用途：既存ファイルに対してインジェストジョブを手動起動 */
+export async function startIngestion(): Promise<{ ingestionJobId: string | null }> {
+  const token = await getAccessToken()
+  const res = await fetch(`${getDocumentsApiUrl()}/api/documents/start-ingestion`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: 'インジェスト起動に失敗しました' }))
+    throw new Error(data.error || `HTTP ${res.status}`)
+  }
   return await res.json()
 }
