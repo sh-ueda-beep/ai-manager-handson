@@ -1,11 +1,18 @@
 import JSZip from 'jszip';
 import { XMLParser } from 'fast-xml-parser';
 
+export interface SlideImage {
+  mediaType: string;
+  data: string;
+}
+
 export interface SlideData {
   slideNumber: number;
   title: string;
   body: string;
   notes: string;
+  images: SlideImage[];
+  imagesTruncated: boolean;
 }
 
 export interface ParseResult {
@@ -136,6 +143,83 @@ function parseNotesXml(xml: string): string {
   return texts.join('\n');
 }
 
+const MAX_IMAGES_PER_SLIDE = 3;
+const MAX_IMAGE_BASE64_BYTES = 1024 * 1024; // 1MB
+
+// _rels ファイルから画像リレーションのZIPパスを返す
+// OOXML仕様: 相対パスの基点は _rels/ の親ディレクトリ（_rels/ 自体ではない）
+async function parseSlideRels(zip: JSZip, slideFile: string): Promise<string[]> {
+  const relsFilePath = slideFile.replace(/^(ppt\/slides\/)(slide\d+\.xml)$/, '$1_rels/$2.rels');
+  const relsEntry = zip.files[relsFilePath];
+  if (!relsEntry) return [];
+
+  const relsXml = await relsEntry.async('string');
+  const parsed = xmlParser.parse(relsXml) as Record<string, unknown>;
+  const rels = parsed['Relationships'] as Record<string, unknown> | undefined;
+  if (!rels) return [];
+
+  let relationships = rels['Relationship'];
+  if (!relationships) return [];
+  if (!Array.isArray(relationships)) relationships = [relationships];
+
+  // _rels/ の親ディレクトリを基点にパスを解決する
+  const relsDir = relsFilePath.replace(/\/_rels\/[^/]+$/, '/');
+
+  const imagePaths: string[] = [];
+  for (const rel of relationships as Record<string, unknown>[]) {
+    const type = rel['@_Type'] as string | undefined;
+    const target = rel['@_Target'] as string | undefined;
+    if (!type?.endsWith('/image') || !target) continue;
+
+    const resolved = relsDir + target.replace(/^\.\//, '');
+    // パスを正規化（../ を解決）
+    const parts = resolved.split('/');
+    const normalized: string[] = [];
+    for (const part of parts) {
+      if (part === '..') normalized.pop();
+      else if (part !== '.') normalized.push(part);
+    }
+    imagePaths.push(normalized.join('/'));
+  }
+
+  return imagePaths;
+}
+
+// ZIPパスから画像をBase64エンコードして返す
+async function extractImages(zip: JSZip, imagePaths: string[]): Promise<{ images: SlideImage[]; imagesTruncated: boolean }> {
+  const images: SlideImage[] = [];
+  let imagesTruncated = false;
+
+  for (const imgPath of imagePaths) {
+    if (images.length >= MAX_IMAGES_PER_SLIDE) {
+      imagesTruncated = true;
+      break;
+    }
+
+    const entry = zip.files[imgPath];
+    if (!entry) {
+      console.warn(`[pptx-parser] image not found in ZIP: ${imgPath}`);
+      continue;
+    }
+
+    const ext = imgPath.split('.').pop()?.toLowerCase();
+    const mediaType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'png' ? 'image/png' : null;
+    if (!mediaType) continue;
+
+    const arrayBuffer = await entry.async('arraybuffer');
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
+    if (base64.length > MAX_IMAGE_BASE64_BYTES) {
+      console.warn(`[pptx-parser] image too large, skipping: ${imgPath} (${base64.length} bytes)`);
+      imagesTruncated = true;
+      continue;
+    }
+
+    images.push({ mediaType, data: base64 });
+  }
+
+  return { images, imagesTruncated };
+}
+
 export async function parsePptx(buffer: Buffer): Promise<ParseResult> {
   const zip = await JSZip.loadAsync(buffer);
 
@@ -163,7 +247,11 @@ export async function parsePptx(buffer: Buffer): Promise<ParseResult> {
       notes = parseNotesXml(notesXml);
     }
 
-    slides.push({ slideNumber: slideNum, title, body, notes });
+    // スライドに埋め込まれた画像を抽出する
+    const imagePaths = await parseSlideRels(zip, slideFile);
+    const { images, imagesTruncated } = await extractImages(zip, imagePaths);
+
+    slides.push({ slideNumber: slideNum, title, body, notes, images, imagesTruncated });
   }
 
   return { totalSlides: slides.length, slides };

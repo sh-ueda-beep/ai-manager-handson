@@ -1,6 +1,7 @@
 import type { ReviewCategory, ReviewItem, SlideReview, StructuredReview } from '@/types'
 
 const CATEGORY_PATTERN = /【(構成|明確さ|表現|情報量)】/
+const VISUAL_PATTERN = /^【ビジュアル】/
 const SLIDE_HEADING_PATTERN = /^##\s*スライド\s*(\d+)/
 const OVERALL_HEADING_PATTERN = /^##?\s*(全体総評|全体レビュー)/
 
@@ -12,33 +13,46 @@ function parseCategory(line: string): { category: ReviewCategory; text: string }
   return text ? { category, text } : null
 }
 
-function parseSlideSection(lines: string[]): ReviewItem[] {
+function parseSlideSection(lines: string[]): { items: ReviewItem[]; visualItems: ReviewItem[] } {
   const items: ReviewItem[] = []
+  const visualItems: ReviewItem[] = []
   let currentCategory: ReviewCategory | null = null
   let currentLines: string[] = []
+  let currentIsVisual = false
 
   const flush = () => {
     if (currentCategory && currentLines.length > 0) {
-      items.push({ category: currentCategory, text: currentLines.join('\n').trim() })
+      const item = { category: currentCategory, text: currentLines.join('\n').trim() }
+      if (currentIsVisual) visualItems.push(item)
+      else items.push(item)
     }
     currentLines = []
+    currentIsVisual = false
   }
 
   for (const line of lines) {
+    if (VISUAL_PATTERN.test(line.replace(/^[\s\-*]+/, ''))) {
+      flush()
+      currentCategory = 'ビジュアル'
+      currentIsVisual = true
+      const text = line.replace(/^[\s\-*]+/, '').replace(VISUAL_PATTERN, '').replace(/^[\s:：]+/, '').trim()
+      if (text) currentLines.push(text)
+      continue
+    }
+
     const catMatch = parseCategory(line)
     if (catMatch) {
       flush()
       currentCategory = catMatch.category
-      if (catMatch.text) {
-        currentLines.push(catMatch.text)
-      }
+      currentIsVisual = false
+      if (catMatch.text) currentLines.push(catMatch.text)
     } else if (currentCategory) {
       currentLines.push(line)
     }
   }
   flush()
 
-  return items
+  return { items, visualItems }
 }
 
 export function parseReviewText(text: string): StructuredReview {
@@ -52,9 +66,9 @@ export function parseReviewText(text: string): StructuredReview {
 
   const flushSlide = () => {
     if (currentSlideNumber !== null && currentSlideLines.length > 0) {
-      const items = parseSlideSection(currentSlideLines)
-      if (items.length > 0) {
-        slideReviews.push({ slideNumber: currentSlideNumber, items })
+      const { items, visualItems } = parseSlideSection(currentSlideLines)
+      if (items.length > 0 || visualItems.length > 0) {
+        slideReviews.push({ slideNumber: currentSlideNumber, items, visualItems })
       }
     }
     currentSlideLines = []
