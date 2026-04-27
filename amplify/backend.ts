@@ -5,6 +5,7 @@ import { createPptxParseLambda } from './functions/pptx-parse/resource';
 import { createAgentCoreRuntime } from './agent/resource';
 import { createKnowledgeBase } from './knowledge-base/resource';
 import { createDocumentsApi } from './functions/documents/resource';
+import { createPptxToPdfLambda } from './functions/pptx-to-pdf/resource';
 
 const backend = defineBackend({
   auth,
@@ -36,7 +37,12 @@ const { httpApi } = createPptxParseLambda(
 // Knowledge Base（RAG）— AgentCore より先に定義
 const kbStack = backend.createStack('KnowledgeBaseStack');
 
-const { knowledgeBaseId, dataSourceId, dataSourceBucket } = createKnowledgeBase(kbStack);
+const {
+  knowledgeBaseId,
+  dataSourceId,
+  dataSourceBucket,
+  multimodalStorageBucket,
+} = createKnowledgeBase(kbStack);
 
 // AgentCore Runtime（AI レビューエージェント）
 const agentCoreStack = backend.createStack('AgentCoreStack');
@@ -46,15 +52,31 @@ const { runtime } = createAgentCoreRuntime(
   backend.auth.resources.userPool,
   backend.auth.resources.userPoolClient,
   knowledgeBaseId,
+  multimodalStorageBucket,
+  dataSourceBucket,
 );
 
-// ドキュメント管理 API（マークダウンアップロード）
+// ドキュメント管理 API（マークダウン・画像・PDF アップロード）
 const documentsStack = backend.createStack('DocumentsStack');
 
-const { httpApi: documentsApi } = createDocumentsApi(
+const {
+  httpApi: documentsApi,
+  jwtAuthorizer: documentsAuthorizer,
+} = createDocumentsApi(
   documentsStack,
   backend.auth.resources.userPool,
   backend.auth.resources.userPoolClient,
+  dataSourceBucket,
+  knowledgeBaseId,
+  dataSourceId,
+);
+
+// PPTX → PDF 変換 Lambda（LibreOffice headless 入り）
+// documents API に `POST /api/documents/upload-pptx` ルートを合流させる
+createPptxToPdfLambda(
+  documentsStack,
+  documentsApi,
+  documentsAuthorizer,
   dataSourceBucket,
   knowledgeBaseId,
   dataSourceId,

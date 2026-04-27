@@ -83,6 +83,14 @@ export function createDocumentsApi(
     authorizer: jwtAuthorizer,
   });
 
+  // PPTX バッチ登録の最後に 1 回呼ぶ専用エンドポイント
+  httpApi.addRoutes({
+    path: '/api/documents/start-ingestion',
+    methods: [apigatewayv2.HttpMethod.POST],
+    integration,
+    authorizer: jwtAuthorizer,
+  });
+
   httpApi.addRoutes({
     path: '/api/documents',
     methods: [apigatewayv2.HttpMethod.GET],
@@ -91,11 +99,19 @@ export function createDocumentsApi(
   });
 
   httpApi.addRoutes({
-    path: '/api/documents/{key}',
+    path: '/api/documents/{key+}',
     methods: [apigatewayv2.HttpMethod.DELETE],
     integration,
     authorizer: jwtAuthorizer,
   });
 
-  return { httpApi, documentsFn };
+  // インジェストジョブ進捗ポーリング
+  httpApi.addRoutes({
+    path: '/api/documents/ingestion-jobs/{jobId}',
+    methods: [apigatewayv2.HttpMethod.GET],
+    integration,
+    authorizer: jwtAuthorizer,
+  });
+
+  return { httpApi, documentsFn, jwtAuthorizer, integration };
 }

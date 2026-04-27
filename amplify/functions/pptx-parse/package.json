@@ -2,6 +2,9 @@
   "name": "pptx-parse-lambda",
   "private": true,
   "type": "module",
+  "scripts": {
+    "test": "tsx --test pptx-parser.test.ts"
+  },
   "dependencies": {
     "jszip": "^3.10.1",
     "fast-xml-parser": "^5.2.3",

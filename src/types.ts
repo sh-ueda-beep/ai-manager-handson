@@ -1,8 +1,16 @@
+export interface SlideImage {
+  index: number
+  mediaType: string
+  bytes?: string
+  presignedUrl?: string
+}
+
 export interface SlideData {
   slideNumber: number
   title: string
   body: string
   notes: string
+  images: SlideImage[]
 }
 
 export interface ParseResult {
