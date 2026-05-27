@@ -16,6 +16,8 @@
   },
   "dependencies": {
     "@aws-amplify/ui-react": "^6.15.1",
+    "@aws-sdk/client-bedrock-agentcore": "^3.1029.0",
+    "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-slot": "^1.2.4",
     "@tailwindcss/vite": "^4.2.1",
     "aws-amplify": "^6.16.2",

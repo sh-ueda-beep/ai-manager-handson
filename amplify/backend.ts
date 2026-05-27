@@ -1,11 +1,13 @@
 import { defineBackend } from '@aws-amplify/backend';
 import { App, Tags } from 'aws-cdk-lib';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { auth } from './auth/resource';
 import { createPptxParseLambda } from './functions/pptx-parse/resource';
 import { createAgentCoreRuntime } from './agent/resource';
 import { createKnowledgeBase } from './knowledge-base/resource';
 import { createDocumentsApi } from './functions/documents/resource';
 import { createPptxToPdfLambda } from './functions/pptx-to-pdf/resource';
+import { createConversationMemory } from './memory/resource';
 
 const backend = defineBackend({
   auth,
@@ -44,6 +46,26 @@ const {
   multimodalStorageBucket,
 } = createKnowledgeBase(kbStack);
 
+// AgentCore Memory（会話履歴保存）— 独立スタックにして authRole への attach で循環依存を発生させない
+const memoryStack = backend.createStack('ConversationMemoryStack');
+
+const { memory } = createConversationMemory(memoryStack);
+
+// 認証済みユーザーに Memory 読み書き権限を付与（auth → memoryStack の単方向参照）
+const authRole = backend.auth.resources.authenticatedUserIamRole;
+authRole.addToPrincipalPolicy(
+  new iam.PolicyStatement({
+    actions: [
+      'bedrock-agentcore:ListSessions',
+      'bedrock-agentcore:ListEvents',
+      'bedrock-agentcore:GetEvent',
+      'bedrock-agentcore:ListActors',
+      'bedrock-agentcore:CreateEvent',
+    ],
+    resources: [memory.memoryArn],
+  }),
+);
+
 // AgentCore Runtime（AI レビューエージェント）
 const agentCoreStack = backend.createStack('AgentCoreStack');
 
@@ -54,6 +76,7 @@ const { runtime } = createAgentCoreRuntime(
   knowledgeBaseId,
   multimodalStorageBucket,
   dataSourceBucket,
+  memory,
 );
 
 // ドキュメント管理 API（マークダウン・画像・PDF アップロード）
@@ -87,6 +110,8 @@ backend.addOutput({
   custom: {
     pptxParseApiUrl: httpApi.apiEndpoint,
     agentRuntimeArn: runtime.agentRuntimeArn,
+    memoryId: memory.memoryId,
+    memoryArn: memory.memoryArn,
     knowledgeBaseId,
     dataSourceId,
     documentsApiUrl: documentsApi.apiEndpoint,

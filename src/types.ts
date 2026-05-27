@@ -18,7 +18,32 @@ export interface ParseResult {
   slides: SlideData[]
 }
 
-export type AppState = 'idle' | 'parsing' | 'parsed' | 'reviewing' | 'reviewed' | 'error'
+export type AppState =
+  | 'idle'
+  | 'parsing'
+  | 'parsed'
+  | 'reviewing'
+  | 'chatting'
+  | 'restoring'
+  | 'error'
+
+export type ConversationRole = 'user' | 'assistant'
+
+export interface ConversationMessage {
+  id: string
+  role: ConversationRole
+  content: string
+  /** 初回 assistant メッセージのみ構造化レビューを保持 */
+  structured?: StructuredReview
+  timestamp?: Date
+}
+
+export interface ConversationSession {
+  sessionId: string
+  title?: string
+  fileName?: string
+  createdAt?: Date
+}
 
 export type ReviewCategory = '構成' | '明確さ' | '表現' | '情報量'
 

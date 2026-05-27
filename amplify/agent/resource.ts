@@ -15,6 +15,7 @@ export function createAgentCoreRuntime(
   knowledgeBaseId?: string,
   multimodalStorageBucket?: s3.IBucket,
   dataSourceBucket?: s3.IBucket,
+  memory?: agentcore.IMemory,
 ) {
   const agentImage = new ContainerImageBuild(stack, 'AgentImage', {
     directory: path.dirname(fileURLToPath(import.meta.url)),
@@ -38,6 +39,7 @@ export function createAgentCoreRuntime(
       ...(knowledgeBaseId ? { KNOWLEDGE_BASE_ID: knowledgeBaseId } : {}),
       // Knowledge Base / Nova MME は us-east-1 に配置される前提
       KB_REGION: 'us-east-1',
+      ...(memory ? { MEMORY_ID: memory.memoryId } : {}),
     },
   });
 
@@ -69,6 +71,19 @@ export function createAgentCoreRuntime(
   }
   if (dataSourceBucket) {
     dataSourceBucket.grantRead(runtime);
+  }
+
+  // 将来の LTM / recallHistory Tool 拡張用に Memory 読み取り権限を付与（auto-inject 方式では未使用）
+  if (memory) {
+    runtime.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          'bedrock-agentcore:ListEvents',
+          'bedrock-agentcore:GetEvent',
+        ],
+        resources: [memory.memoryArn],
+      }),
+    );
   }
 
   return { runtime };

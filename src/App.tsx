@@ -1,23 +1,46 @@
-import { useState, useCallback } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { FileText, LogOut } from 'lucide-react'
 import { useAuthenticator } from '@aws-amplify/ui-react'
 import { fetchAuthSession } from 'aws-amplify/auth'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { UploadCard } from '@/components/UploadCard'
-import { Sidebar } from '@/components/Sidebar'
-import { ReviewPanel } from '@/components/ReviewPanel'
+import { HistorySidebar } from '@/components/HistorySidebar'
+import { ChatPanel } from '@/components/ChatPanel'
 import { ReferenceSidebar } from '@/components/ReferenceSidebar'
 import { parseReviewText } from '@/lib/parseReview'
-import type { AppState, ParseResult, StructuredReview } from '@/types'
+import {
+  createMemoryContext,
+  listMessages,
+  listSessions,
+  saveMessage,
+  type MemoryContext,
+} from '@/lib/agentcoreMemory'
+import type {
+  AppState,
+  ConversationMessage,
+  ConversationSession,
+  ParseResult,
+  SlideData,
+} from '@/types'
 
-function getCustomConfig() {
-  const realConfigs = import.meta.glob('../amplify_outputs.json', { eager: true }) as Record<string, Record<string, unknown>>
+interface CustomConfig {
+  pptxParseApiUrl: string
+  agentRuntimeArn: string
+  memoryId: string
+}
+
+function getCustomConfig(): CustomConfig {
+  const realConfigs = import.meta.glob('../amplify_outputs.json', { eager: true }) as Record<
+    string,
+    Record<string, unknown>
+  >
   const config = Object.values(realConfigs)[0] as Record<string, unknown> | undefined
   const custom = config?.custom as Record<string, string> | undefined
   return {
     pptxParseApiUrl: custom?.pptxParseApiUrl ?? '',
     agentRuntimeArn: custom?.agentRuntimeArn ?? '',
+    memoryId: custom?.memoryId ?? '',
   }
 }
 
@@ -26,24 +49,103 @@ async function getAccessToken(): Promise<string> {
   return session.tokens?.accessToken?.toString() ?? ''
 }
 
+interface AgentSlide {
+  slideNumber: number
+  title: string
+  body: string
+  notes: string
+  imageCount: number
+}
+
+type ConversationTurn = { role: 'user' | 'assistant'; content: string }
+type InvokePayload =
+  | { mode: 'initial'; slides: AgentSlide[]; fileName?: string }
+  | { mode: 'followup'; message: string; history: ConversationTurn[] }
+
+function toAgentSlides(slides: SlideData[]): AgentSlide[] {
+  // Agent に送るのはテキスト情報のみ（画像バイトは KB 経由で参照）
+  return slides.map(s => ({
+    slideNumber: s.slideNumber,
+    title: s.title,
+    body: s.body,
+    notes: s.notes,
+    imageCount: s.images?.length ?? 0,
+  }))
+}
+
 function App() {
   const { signOut, user } = useAuthenticator()
+  const config = getCustomConfig()
 
   const [state, setState] = useState<AppState>('idle')
-  const [file, setFile] = useState<File | null>(null)
   const [error, setError] = useState<string>('')
+
+  const [file, setFile] = useState<File | null>(null)
   const [parseResult, setParseResult] = useState<ParseResult | null>(null)
-  const [reviewText, setReviewText] = useState<string>('')
-  const [selectedSlide, setSelectedSlide] = useState<number | null>(null)
-  const [structuredReview, setStructuredReview] = useState<StructuredReview | null>(null)
+
+  const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID())
+  const [messages, setMessages] = useState<ConversationMessage[]>([])
+  const [sessions, setSessions] = useState<ConversationSession[]>([])
+  const [inputText, setInputText] = useState('')
+
+  const memoryCtxRef = useRef<MemoryContext | null>(null)
+
+  const getMemoryCtx = useCallback(async () => {
+    if (memoryCtxRef.current) return memoryCtxRef.current
+    if (!config.memoryId) return null
+    try {
+      memoryCtxRef.current = await createMemoryContext(config.memoryId)
+      return memoryCtxRef.current
+    } catch (err) {
+      console.warn('Memory context unavailable', err)
+      return null
+    }
+  }, [config.memoryId])
+
+  const [sessionsError, setSessionsError] = useState<string>('')
+
+  const refreshSessions = useCallback(async () => {
+    const ctx = await getMemoryCtx()
+    if (!ctx) {
+      setSessionsError('履歴ストレージに接続できません (memoryId 未設定の可能性)')
+      return
+    }
+    try {
+      const list = await listSessions(ctx)
+      setSessions(
+        list.map((s) => ({
+          sessionId: s.sessionId,
+          title: s.title,
+          fileName: s.fileName,
+          createdAt: s.createdAt,
+        })),
+      )
+      setSessionsError('')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.warn('Failed to list sessions', err)
+      setSessionsError(msg)
+    }
+  }, [getMemoryCtx])
+
+  useEffect(() => {
+    void refreshSessions()
+  }, [refreshSessions])
+
+  const handleNewSession = useCallback(() => {
+    setSessionId(crypto.randomUUID())
+    setMessages([])
+    setFile(null)
+    setParseResult(null)
+    setError('')
+    setInputText('')
+    setState('idle')
+  }, [])
 
   const handleFileSelect = useCallback((f: File) => {
     setFile(f)
     setError('')
     setParseResult(null)
-    setReviewText('')
-    setStructuredReview(null)
-    setSelectedSlide(null)
     setState('idle')
   }, [])
 
@@ -53,15 +155,17 @@ function App() {
     setError('')
 
     try {
-      const { pptxParseApiUrl } = getCustomConfig()
       const token = await getAccessToken()
 
       const arrayBuffer = await file.arrayBuffer()
       const base64 = btoa(
-        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+        new Uint8Array(arrayBuffer).reduce(
+          (data, byte) => data + String.fromCharCode(byte),
+          '',
+        ),
       )
 
-      const res = await fetch(`${pptxParseApiUrl}/api/pptx/parse`, {
+      const res = await fetch(`${config.pptxParseApiUrl}/api/pptx/parse`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -82,103 +186,252 @@ function App() {
       setError(err instanceof Error ? err.message : '解析中にエラーが発生しました')
       setState('error')
     }
-  }, [file])
+  }, [file, config.pptxParseApiUrl])
 
-  const handleReview = useCallback(async () => {
-    if (!parseResult) return
-    setState('reviewing')
-    setReviewText('')
-    setStructuredReview(null)
-    setError('')
-
-    try {
-      const { agentRuntimeArn } = getCustomConfig()
+  const streamInvoke = useCallback(
+    async (
+      payload: InvokePayload,
+      onDelta: (text: string) => void,
+      onTitle: (title: string) => void,
+    ) => {
       const token = await getAccessToken()
-
-      // Agent に送るのはテキスト情報のみで十分（画像バイトは KB 経由で参照）
-      // images の bytes/presignedUrl を剥がして枚数情報だけ残す
-      const slidesForAgent = parseResult.slides.map(s => ({
-        slideNumber: s.slideNumber,
-        title: s.title,
-        body: s.body,
-        notes: s.notes,
-        imageCount: s.images?.length ?? 0,
-      }))
-
-      const url = `https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/${encodeURIComponent(agentRuntimeArn)}/invocations?qualifier=DEFAULT`
+      const url = `https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/${encodeURIComponent(config.agentRuntimeArn)}/invocations?qualifier=DEFAULT`
       const res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
           Accept: 'text/event-stream',
-          'x-amzn-bedrock-agentcore-runtime-session-id': crypto.randomUUID(),
+          'x-amzn-bedrock-agentcore-runtime-session-id': sessionId,
         },
-        body: JSON.stringify({ slides: slidesForAgent }),
+        body: JSON.stringify(payload),
       })
 
       if (!res.ok) {
-        throw new Error(`レビューリクエストに失敗しました (HTTP ${res.status})`)
+        throw new Error(`リクエストに失敗しました (HTTP ${res.status})`)
       }
 
       const reader = res.body?.getReader()
       if (!reader) throw new Error('ストリーミング応答を取得できません')
 
       const decoder = new TextDecoder()
-      let accumulated = ''
       let lineBuf = ''
+      let currentEvent = 'message'
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-
         lineBuf += decoder.decode(value, { stream: true })
         const lines = lineBuf.split('\n')
         lineBuf = lines.pop() ?? ''
 
         for (const line of lines) {
-          if (line.startsWith('event: ')) continue
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim() || 'message'
+            continue
+          }
           if (!line.startsWith('data: ')) continue
           const data = line.slice(6)
           if (data === '[DONE]') continue
 
           try {
-            const parsed = JSON.parse(data)
-            if (parsed.text) {
-              accumulated += parsed.text
-              setReviewText(accumulated)
+            const parsed = JSON.parse(data) as { text?: string; title?: string }
+            if (currentEvent === 'title' && parsed.title) {
+              onTitle(parsed.title)
+            } else if (parsed.text) {
+              onDelta(parsed.text)
             }
           } catch {
-            // JSON パース失敗は無視（不完全なチャンク）
+            // noop
           }
         }
       }
+    },
+    [config.agentRuntimeArn, sessionId],
+  )
 
-      setStructuredReview(parseReviewText(accumulated))
-      setState('reviewed')
+  const handleInitialReview = useCallback(async () => {
+    if (!parseResult) return
+    setState('reviewing')
+    setError('')
+
+    const userMsgId = crypto.randomUUID()
+    const assistantMsgId = crypto.randomUUID()
+    const userContent = `${file?.name ?? 'PPTX'} をレビューしてください。`
+    setMessages([
+      { id: userMsgId, role: 'user', content: userContent },
+      { id: assistantMsgId, role: 'assistant', content: '' },
+    ])
+
+    const ctx = await getMemoryCtx()
+    if (ctx) {
+      try {
+        await saveMessage(
+          ctx,
+          sessionId,
+          'user',
+          userContent,
+          file?.name ? { fileName: file.name } : undefined,
+        )
+      } catch (err) {
+        console.warn('saveMessage(user) failed', err)
+      }
+    }
+
+    let assistantText = ''
+    let assistantTitle = ''
+    try {
+      await streamInvoke(
+        { mode: 'initial', slides: toAgentSlides(parseResult.slides), fileName: file?.name },
+        (delta) => {
+          assistantText += delta
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantMsgId ? { ...m, content: assistantText } : m)),
+          )
+        },
+        (title) => {
+          assistantTitle = title
+          setSessions((prev) => {
+            const existing = prev.find((s) => s.sessionId === sessionId)
+            if (existing) {
+              return prev.map((s) => (s.sessionId === sessionId ? { ...s, title } : s))
+            }
+            return [
+              { sessionId, title, fileName: file?.name, createdAt: new Date() },
+              ...prev,
+            ]
+          })
+        },
+      )
+
+      const structured = parseReviewText(assistantText)
+      setMessages((prev) =>
+        prev.map((m) => (m.id === assistantMsgId ? { ...m, structured } : m)),
+      )
+
+      if (ctx && assistantText) {
+        try {
+          const metadata: Record<string, string> = {}
+          if (assistantTitle) metadata.title = assistantTitle
+          if (file?.name) metadata.fileName = file.name
+          await saveMessage(
+            ctx,
+            sessionId,
+            'assistant',
+            assistantText,
+            Object.keys(metadata).length > 0 ? metadata : undefined,
+          )
+        } catch (err) {
+          console.warn('saveMessage(assistant) failed', err)
+        }
+      }
+
+      setState('chatting')
+      void refreshSessions()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'レビュー中にエラーが発生しました')
       setState('error')
     }
-  }, [parseResult])
+  }, [parseResult, file, streamInvoke, sessionId, refreshSessions, getMemoryCtx])
 
-  const handleReset = useCallback(() => {
-    setFile(null)
-    setParseResult(null)
-    setReviewText('')
-    setStructuredReview(null)
-    setSelectedSlide(null)
+  const handleSendFollowup = useCallback(async () => {
+    const text = inputText.trim()
+    if (!text || state !== 'chatting') return
     setError('')
-    setState('idle')
-  }, [])
+    setInputText('')
 
-  const isParsing = state === 'parsing'
-  const isReviewing = state === 'reviewing'
-  const isLoading = isParsing || isReviewing
-  const showTwoColumn = state === 'parsed' || state === 'reviewing' || state === 'reviewed'
+    // 現在の UI 状態をそのまま agent に渡す履歴として snapshot。
+    // 空の placeholder assistant（ストリーム受信待ち）は除外する。
+    const history: ConversationTurn[] = messages
+      .filter((m) => m.content)
+      .map((m) => ({ role: m.role, content: m.content }))
+
+    const userMsgId = crypto.randomUUID()
+    const assistantMsgId = crypto.randomUUID()
+    setMessages((prev) => [
+      ...prev,
+      { id: userMsgId, role: 'user', content: text },
+      { id: assistantMsgId, role: 'assistant', content: '' },
+    ])
+
+    const ctx = await getMemoryCtx()
+    if (ctx) {
+      try {
+        await saveMessage(ctx, sessionId, 'user', text)
+      } catch (err) {
+        console.warn('saveMessage(user) failed', err)
+      }
+    }
+
+    let assistantText = ''
+    try {
+      await streamInvoke(
+        { mode: 'followup', message: text, history },
+        (delta) => {
+          assistantText += delta
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantMsgId ? { ...m, content: assistantText } : m)),
+          )
+        },
+        () => {},
+      )
+
+      if (ctx && assistantText) {
+        try {
+          await saveMessage(ctx, sessionId, 'assistant', assistantText)
+        } catch (err) {
+          console.warn('saveMessage(assistant) failed', err)
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '送信中にエラーが発生しました')
+    }
+  }, [inputText, state, messages, streamInvoke, sessionId, getMemoryCtx])
+
+  const handleSelectSession = useCallback(
+    async (targetId: string) => {
+      if (targetId === sessionId && messages.length > 0) return
+      const ctx = await getMemoryCtx()
+      if (!ctx) return
+      setState('restoring')
+      setError('')
+      setSessionId(targetId)
+      setFile(null)
+      setParseResult(null)
+      try {
+        const past = await listMessages(ctx, targetId)
+        const restored: ConversationMessage[] = past.map((m, i) => {
+          const base: ConversationMessage = {
+            id: `${targetId}-${i}`,
+            role: m.role,
+            content: m.content,
+            timestamp: m.timestamp,
+          }
+          if (i === 1 && m.role === 'assistant') {
+            return { ...base, structured: parseReviewText(m.content) }
+          }
+          return base
+        })
+        setMessages(restored)
+        setState('chatting')
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'セッション復元に失敗しました')
+        setState('error')
+      }
+    },
+    [sessionId, messages.length, getMemoryCtx],
+  )
+
+  const activeSession = sessions.find((s) => s.sessionId === sessionId)
+  const headerTitle = activeSession?.title ?? (file?.name ?? '新しいレビュー')
+
+  // Upload フェーズ: 履歴もファイルもない、あるいは parsing/parsed 中
+  const showUploadFlow =
+    messages.length === 0 &&
+    (state === 'idle' || state === 'parsing' || state === 'parsed' || state === 'error')
 
   return (
-    <div className="h-screen flex flex-col bg-bg-light">
+    <div className="flex h-screen flex-col bg-bg-light">
       <header className="border-b border-border bg-white px-6 py-4">
         <div className="flex items-center gap-3">
           <FileText className="h-6 w-6 text-teal" />
@@ -191,78 +444,53 @@ function App() {
         </div>
       </header>
 
-      {/* 解析前: センタリングされた1カラム */}
-      {!showTwoColumn && (
-        <main className="mx-auto w-full max-w-4xl px-6 py-8 space-y-6">
-          <UploadCard
-            file={file}
-            isLoading={isLoading}
-            isParsing={isParsing}
-            isReviewing={isReviewing}
-            hasParseResult={!!parseResult}
-            onFileSelect={handleFileSelect}
-            onParse={handleParse}
-            onReview={handleReview}
-            onReset={handleReset}
-          />
-          {error && (
-            <Alert variant="destructive">
-              <AlertTitle>エラー</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-        </main>
-      )}
+      <div className="flex flex-1 overflow-hidden">
+        <HistorySidebar
+          sessions={sessions}
+          activeSessionId={sessionId}
+          onNewSession={handleNewSession}
+          onSelectSession={(id) => void handleSelectSession(id)}
+          errorMessage={sessionsError}
+        />
 
-      {/* 解析後: 3カラム（左:スライド、中央:レビュー、右:参照データ） */}
-      {showTwoColumn && file && parseResult && (
-        <div className="flex flex-1 overflow-hidden">
-          <Sidebar
-            file={file}
-            parseResult={parseResult}
-            selectedSlide={selectedSlide}
-            onSlideSelect={setSelectedSlide}
-          />
-          <main className="flex flex-1 flex-col overflow-hidden">
-            {/* レビュー未実行時: 実行ボタン */}
-            {state === 'parsed' && (
-              <div className="border-b border-border bg-white px-6 py-4">
-                <div className="flex items-center gap-3">
-                  <Button onClick={handleReview} disabled={isLoading}>
-                    レビューを実行
-                  </Button>
-                  <Button variant="outline" onClick={handleReset}>
-                    リセット
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {/* レビュー中 / レビュー完了 */}
-            {(state === 'reviewing' || state === 'reviewed') && (
-              <ReviewPanel
-                isReviewing={isReviewing}
-                isReviewed={state === 'reviewed'}
-                reviewText={reviewText}
-                structuredReview={structuredReview}
-                parseResult={parseResult}
-                selectedSlide={selectedSlide}
+        {showUploadFlow ? (
+          <main className="flex-1 overflow-y-auto">
+            <div className="mx-auto w-full max-w-3xl px-6 py-10 space-y-6">
+              <UploadCard
+                file={file}
+                isLoading={state === 'parsing'}
+                isParsing={state === 'parsing'}
+                isReviewing={false}
+                hasParseResult={!!parseResult}
+                onFileSelect={handleFileSelect}
+                onParse={handleParse}
+                onReview={handleInitialReview}
+                onReset={handleNewSession}
               />
-            )}
-
-            {/* エラー表示（3カラム内） */}
-            {error && (
-              <div className="p-6">
+              {error && (
                 <Alert variant="destructive">
                   <AlertTitle>エラー</AlertTitle>
                   <AlertDescription>{error}</AlertDescription>
                 </Alert>
-              </div>
-            )}
+              )}
+            </div>
           </main>
-          <ReferenceSidebar />
-        </div>
-      )}
+        ) : (
+          <ChatPanel
+            state={state}
+            headerTitle={headerTitle}
+            fileName={file?.name ?? activeSession?.fileName}
+            parseResult={parseResult}
+            messages={messages}
+            error={error}
+            inputText={inputText}
+            onInputChange={setInputText}
+            onSend={() => void handleSendFollowup()}
+          />
+        )}
+
+        <ReferenceSidebar />
+      </div>
     </div>
   )
 }
